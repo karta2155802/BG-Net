@@ -1,0 +1,117 @@
+import argparse
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+import random
+import numpy as np
+import torch
+import torch.nn.parallel
+import torch.optim
+
+from utils.utils import Monitor, get_dataset, get_network, print_args, save_args, load_checkpoint, save_checkpoint, get_dex_ycb_dataset
+from utils.epoch import single_epoch
+from utils.options import add_opts
+import torch.backends.cudnn as cudnn
+
+
+def main(args):
+    # Initialize randoms seeds
+    torch.cuda.manual_seed_all(args.manual_seed)
+    torch.manual_seed(args.manual_seed)
+    np.random.seed(args.manual_seed)
+    random.seed(args.manual_seed)
+    cudnn.benchmark = True
+
+    # create exp result dir
+    os.makedirs(args.host_folder, exist_ok=True)
+    # Initialize model
+    model = get_network(args)
+
+    if args.use_cuda and torch.cuda.is_available():
+        print("Using {} GPUs !".format(torch.cuda.device_count()))
+        model.cuda()
+
+    start_epoch = 0
+    device = torch.device('cuda')if torch.cuda.is_available() and args.use_cuda else torch.device('cpu')
+
+    if not args.evaluate:
+        model_params = filter(lambda p: p.requires_grad, model.parameters())
+        optimizer = torch.optim.Adam(model_params, lr=args.lr, weight_decay=args.weight_decay)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_decay_step, gamma=args.lr_decay_gamma)
+        if args.use_ho3d:
+            train_dat = get_dataset(args, mode="train")
+        else:
+            train_dat = get_dex_ycb_dataset(args, mode="train")
+        print("training dataset size: {}".format(len(train_dat)))
+        train_loader = torch.utils.data.DataLoader(train_dat, batch_size=args.train_batch, shuffle=True,
+                                                   num_workers=int(args.workers), pin_memory=True, drop_last=False)
+        monitor = Monitor(hosting_folder=args.host_folder)
+        if args.resume is not None:
+            start_epoch = load_checkpoint(model, resume_path=args.resume, optimizer=optimizer, scheduler=scheduler, strict=False, device=device)
+    else:
+        assert args.resume is not None, "need trained model for evaluation"
+        start_epoch = load_checkpoint(model, resume_path=args.resume, strict=False, device=device)
+        args.epochs = start_epoch + 1
+
+    #print(args.epochs)
+
+    # Initialize validation dataset
+    if args.use_ho3d:
+        val_dat = get_dataset(args, mode="evaluation")
+    else:
+        val_dat = get_dex_ycb_dataset(args, mode="evaluation")
+    print("evaluation dataset size: {}".format(len(val_dat)))
+    val_loader = torch.utils.data.DataLoader(val_dat, batch_size=args.test_batch,
+                                             shuffle=False, num_workers=int(args.workers),
+                                             pin_memory=True, drop_last=False)
+
+    for epoch in range(start_epoch, args.epochs):
+        if not args.evaluate:
+            print("Using lr {}".format(optimizer.param_groups[0]["lr"]))
+            train_avg_meters = single_epoch(args=args, loader=train_loader,
+                                            model=model, optimizer=optimizer, epoch=epoch)
+
+            message = ["| Epoch: %d" % (epoch + 1), "| lr: %g" % (optimizer.param_groups[0]["lr"])]
+            message += ["| %s: %.4f" %(k, v.avg) for k, v in train_avg_meters.average_meters.items()]
+            monitor.log_train(" ".join(message))
+
+        if not args.evaluate:
+            if args.lr_decay_gamma:
+                if epoch <= 35 or args.use_ho3d:
+                    scheduler.step()
+            if (epoch+1) % args.snapshot == 0:
+                print(f"save epoch {epoch+1} checkpoint to {args.host_folder}")
+                save_checkpoint(
+                {
+                    "epoch": epoch + 1,
+                    "network": args.network,
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "state_dict": model.state_dict(),
+                },
+                checkpoint=args.host_folder, filename=f"checkpoint_{epoch+1}.pth.tar")
+
+
+        # Evaluate on validation set
+        if args.evaluate or (epoch + 1) % args.test_freq == 0:
+            with torch.no_grad():
+                single_epoch(args=args, loader=val_loader, model=model,
+                             epoch=epoch, optimizer=None, 
+                             indices_order=val_dat.jointsMapSimpleToMano if hasattr(val_dat, "jointsMapSimpleToMano") else None)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Hand-Object training")
+    add_opts(parser)
+
+    args = parser.parse_args()
+
+    if not args.use_ho3d:
+        args.epochs = 40
+        args.lr_decay_step = 5
+
+    print_args(args)
+    save_args(args, save_folder=args.host_folder, opt_prefix="option")
+    main(args)
+    print("All done !")
+
+

@@ -24,7 +24,7 @@ class HO3D(data.Dataset):
         self.mode = mode
         self.inp_res = inp_res
         self.joint_root_id = 0
-        self.hand_factor = 1.25
+        self.hand_factor = 1.1
         self.obj_factor = 1.0
         self.jointsMapManoToSimple = [0, 13, 14, 15, 16,
                                       1, 2, 3, 17,

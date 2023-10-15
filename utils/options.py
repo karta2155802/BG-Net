@@ -40,7 +40,7 @@ def add_opts(parser):
     # options for training
     parser.add_argument("--manual_seed", default=0, type=int, help="manual seed")
     parser.add_argument("-j", "--workers", default=16, type=int, help="number of data loading workers (default: 16)")
-    parser.add_argument("--epochs", default=60, type=int, help="number of total epochs to run")
+    parser.add_argument("--epochs", default=70, type=int, help="number of total epochs to run")
     parser.add_argument("--train_batch", default=32, type=int, help="Train batch size")
     parser.add_argument("--test_batch", default=16, type=int, metavar="N", help="Test batch size")
     parser.add_argument("--lr", "--learning-rate", default=1e-4, type=float, help="initial learning rate")

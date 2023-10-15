@@ -40,25 +40,46 @@ class obj_regHead(nn.Module):
         super(obj_regHead, self).__init__()
         if inter_channels is None:
             inter_channels = channels // 2
-
-        self.conv = nn.Conv2d(channels+1, channels, kernel_size=1, stride=1, padding=0, bias=True)
-
-        self.residual1 = Residual(channels, channels)
-        self.residual2 = Residual(channels, channels)
-        self.residual3 = Residual(channels, channels)
+        # conv1
+        self.conv1_1 = nn.Conv2d(channels, inter_channels, kernel_size=1, stride=1, padding=0, bias=True)
+        nn.init.constant_(self.conv1_1.bias, 0)
+        self.bn1_1 = nn.BatchNorm2d(inter_channels)
+        self.conv1_2 = nn.Conv2d(inter_channels, channels, kernel_size=3, stride=1, padding=1, bias=True)
+        nn.init.constant_(self.conv1_2.bias, 0)
+        self.bn1_2 = nn.BatchNorm2d(channels)
+        # conv2
+        self.conv2_1 = nn.Conv2d(channels, inter_channels, kernel_size=1, stride=1, padding=0, bias=True)
+        nn.init.constant_(self.conv2_1.bias, 0)
+        self.bn2_1 = nn.BatchNorm2d(inter_channels)
+        self.conv2_2 = nn.Conv2d(inter_channels, channels, kernel_size=3, stride=1, padding=1, bias=True)
+        nn.init.constant_(self.conv2_2.bias, 0)
+        self.bn2_2 = nn.BatchNorm2d(channels)
+        # conv3
+        self.conv3_1 = nn.Conv2d(channels, inter_channels, kernel_size=1, stride=1, padding=0, bias=True)
+        nn.init.constant_(self.conv3_1.bias, 0)
+        self.bn3_1 = nn.BatchNorm2d(inter_channels)
+        self.conv3_2 = nn.Conv2d(inter_channels, channels, kernel_size=3, stride=1, padding=1, bias=True)
+        nn.init.constant_(self.conv3_2.bias, 0)
+        self.bn3_2 = nn.BatchNorm2d(channels)
         # out conv regression
         self.out_conv = nn.Conv2d(channels, joint_nb*3, kernel_size=1, stride=1, padding=0, bias=True)
-        #nn.init.constant_(self.out_conv.bias, 0)
+        nn.init.constant_(self.out_conv.bias, 0)
         # activation funcs
-        #self.leaky_relu = nn.LeakyReLU(0.1, inplace=True)
+        self.leaky_relu = nn.LeakyReLU(0.1, inplace=True)
 
     def forward(self, x):
-        x = self.residual1(x)
-        x = self.residual2(x)
-        x = self.residual3(x)
+        # conv1
+        out = self.leaky_relu(self.bn1_1(self.conv1_1(x)))
+        out = self.leaky_relu(self.bn1_2(self.conv1_2(out)))
+        # conv2
+        out = self.leaky_relu(self.bn2_1(self.conv2_1(out)))
+        out = self.leaky_relu(self.bn2_2(self.conv2_2(out)))
+        # conv3
+        out = self.leaky_relu(self.bn3_1(self.conv3_1(out)))
+        out = self.leaky_relu(self.bn3_2(self.conv3_2(out)))
         # out conv regression
-        out = self.out_conv(x)
-        return out, x
+        out = self.out_conv(out)
+        return out
 
 
 class Pose2DLayer(nn.Module):

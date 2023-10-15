@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 
-from networks.backbone import FPN
+from networks.backbone_share import FPN
 from networks.hand_head import hand_Encoder, hand_regHead
 from networks.object_head import obj_regHead, Pose2DLayer
 from networks.mano_head import mano_regHead
@@ -27,10 +27,8 @@ class HONet(nn.Module):
         self.out_res = roi_res
 
         # FPN-Res50 backbone
-        self.hand_base_net = FPN(pretrained=pretrained)
-        self.obj_base_net = FPN(pretrained=pretrained)
+        self.base_net = FPN(pretrained=pretrained)
 
-        self.seg_head = SegmHead(in_dim=channels, class_dim=1, upsample=False)
         # hand head
         self.hand_head = hand_regHead(roi_res=roi_res, joint_nb=joint_nb,
                                       stacks=stacks, channels=channels, blocks=blocks)
@@ -46,87 +44,67 @@ class HONet(nn.Module):
         self.obj_reorgLayer = Pose2DLayer(joint_nb=joint_nb)
 
         # CR blocks
-        self.o_transformer = Transformer(inp_res=roi_res, dim=channels, depth=transformer_depth, num_heads=transformer_head)
+        self.transformer_obj = Transformer(inp_res=roi_res, dim=channels, depth=transformer_depth, num_heads=transformer_head)
+        self.transformer_hand = Transformer(inp_res=roi_res, dim=channels*2,depth=transformer_depth, num_heads=transformer_head)
 
 
     def forward(self, imgs, bbox_hand, bbox_obj, mano_params=None, batch_idx=None):
         batch = imgs.shape[0]
 
-        idx_tensor = torch.arange(batch, device=imgs.device).float().view(-1, 1)
-        # get roi boxes
-        roi_boxes_hand = torch.cat((idx_tensor, bbox_hand), dim=1)
-        roi_boxes_obj = torch.cat((idx_tensor, bbox_obj), dim=1)
-
         inter_topLeft = torch.max(bbox_hand[:, :2], bbox_obj[:, :2])
         inter_bottomRight = torch.min(bbox_hand[:, 2:], bbox_obj[:, 2:])
         bbox_inter = torch.cat((inter_topLeft, inter_bottomRight), dim=1)
-        roi_boxes_inter = torch.cat((idx_tensor, bbox_inter), dim=1)
-        
+        msk_inter = ((inter_bottomRight-inter_topLeft > 0).sum(dim=1)) == 2
         # P2 from FPN Network
-        hand_P2 = self.hand_base_net(imgs) # B x 256 x 64 x 64
-        
+        P2_h,P2_o = self.base_net(imgs)
+        idx_tensor = torch.arange(batch, device=imgs.device).float().view(-1, 1)
+        # get roi boxes
+        roi_boxes_hand = torch.cat((idx_tensor, bbox_hand), dim=1)
         # 4 here is the downscale size in FPN network(P2)
-        Fh = ops.roi_align(hand_P2, roi_boxes_hand, output_size=(self.out_res, self.out_res), spatial_scale=1.0 / 4.0, sampling_ratio=-1)  # hand B x 256 x 32 x 32
-        Fho = ops.roi_align(hand_P2, roi_boxes_obj, output_size=(self.out_res, self.out_res), spatial_scale=1.0 / 4.0, sampling_ratio=-1)
-        Finter = ops.roi_align(hand_P2, roi_boxes_inter, output_size=(self.out_res, self.out_res), spatial_scale=1.0 / 4.0, sampling_ratio=-1)
-        # hand forward
-        out_hm, encoding, preds_joints = self.hand_head(Fh) # B x 256 x 32 x 32
-        mano_encoding = self.hand_encoder(out_hm, encoding) # B x 1024
-        pred_mano_results, gt_mano_results = self.mano_branch(mano_encoding, mano_params=mano_params)
+        x_hand = ops.roi_align(P2_h, roi_boxes_hand, output_size=(self.out_res, self.out_res), spatial_scale=1.0/4.0,
+                          sampling_ratio=-1)  # hand
+
+        x_obj = ops.roi_align(P2_o, roi_boxes_hand, output_size=(self.out_res, self.out_res), spatial_scale=1.0/4.0,
+                          sampling_ratio=-1)  # hand
 
         # obj forward
-        pred_obj_results = None
-        obj_mask = None
         if self.reg_object:
-            obj_P2 = self.obj_base_net(imgs)
-            Fo = ops.roi_align(obj_P2, roi_boxes_obj, output_size=(self.out_res, self.out_res), spatial_scale=1.0 / 4.0, sampling_ratio=-1)  # obj
-            obj_mask = self.seg_head(Fo)
-            y, attn_score = self.o_transformer(Fo, Fho)
-            out_fm, x = self.obj_head(y)
-            pred_obj_results = self.obj_reorgLayer(out_fm)
-            
-            '''ii = imgs[-1].permute(1,2,0).cpu().numpy()
-            hh = hand_P2[-1].sum(dim=0).cpu().numpy()[1:63, 1:63]
-            oo = obj_P2[-1].sum(dim=0).cpu().numpy()[1:63, 1:63] * -1
-            Ro = Fo[-1].sum(dim=0).cpu().numpy() * -1
-            Rho = Fho[-1].sum(dim=0).cpu().numpy()
-            Rinter = Finter[-1].sum(dim=0).cpu().numpy()
-            o_fm = x[-1].sum(dim=0).cpu().numpy() * -1
-            mm = obj_mask[-1].permute(1,2,0).repeat(1,1,3).detach().cpu().numpy()
-            
-            ii = np.ascontiguousarray((ii*255).astype(np.uint8))
-            bbox = bbox_obj.cpu().numpy()[-1].astype(np.int32)
-            w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            vv = vis_bbox(ii, bbox, thickness=1)
+            roi_boxes_obj = torch.cat((idx_tensor, bbox_obj), dim=1)
+            roi_boxes_inter = torch.cat((idx_tensor, bbox_inter), dim=1)
 
-            q_point = np.random.randint(0, 32, size=2) # random query point(x, y)
-            q_point_ori = [q_point[0]*w/31+bbox[0], q_point[1]*h/31+bbox[1]]
-            print(q_point)
-            query_img = vis_keypoints(ii, [q_point_ori], radius=5)
-            output_list = [query_img]
-            # attn_socre 16x4x1024x1024
-            try:
-                for i in range(1,2):
-                    attn = attn_score[-1][i].view(self.out_res, self.out_res, self.out_res, self.out_res).cpu().numpy()
-                    attn = np.expand_dims(attn, axis=-1).repeat(3, axis=2) # 32x32x32x32x3
-                    attn1 = attn[q_point[1], q_point[0], :,:]
-                    attn1 = cv2.resize(attn1, (w, h))
-                    attn1 = (((attn1-attn1.min()) / (attn1.max()-attn1.min())) * 255).astype(np.uint8) # normalize
-                    
-                    attn1 = cv2.applyColorMap(attn1, cv2.COLORMAP_JET)
-                    attn_img = np.copy(ii)
-                    attn_img[bbox[1]:bbox[1]+h, bbox[0]:bbox[0]+w] = cv2.addWeighted(ii[bbox[1]:bbox[1]+h, bbox[0]:bbox[0]+w], 1.0 - 0.5, attn1, 0.5, 0)
-                    output_list.append(attn_img)
+            y = ops.roi_align(P2_o, roi_boxes_obj, output_size=(self.out_res, self.out_res), spatial_scale=1.0 / 4.0,
+                              sampling_ratio=-1)  # obj
 
-                #show_figure(output_list)
-                save_combined_figure(output_list, "exp-results/attn", img_name=str(batch_idx))
-            except:
-                print("fail")'''
-            #save_figure([ii, hh, oo, mm, o_fm, Ro, Rho, Rinter], "exp-results")
-            #show_figure([ii, hh, oo, mm, o_fm, Ro, Rho, Rinter])
-            #save_combined_figure([vv, mm], "exp-results/mask", img_name=str(batch_idx))
 
-        return preds_joints, pred_mano_results, gt_mano_results, pred_obj_results, obj_mask
+
+            z_x = ops.roi_align(P2_h, roi_boxes_inter, output_size=(self.out_res, self.out_res), spatial_scale=1.0 / 4.0,
+                              sampling_ratio=-1)  # intersection
+
+    
+            z_x = msk_inter[:, None, None, None] * z_x
+
+            #print(3)
+
+            hand_obj = torch.cat([x_hand,x_obj.detach()],dim=1)
+            hand_obj = self.transformer_hand(hand_obj,hand_obj)
+
+            y = self.transformer_obj(y, z_x.detach())
+
+            out_fm = self.obj_head(y)
+            preds_obj = self.obj_reorgLayer(out_fm)
+        else:
+            preds_obj = None
+
+        hand = hand_obj[:,0:256,:,:]
+        #hand forward
+
+        out_hm, encoding, preds_joints = self.hand_head(hand)
+
+        mano_encoding = self.hand_encoder(out_hm, encoding)
+
+        pred_mano_results, gt_mano_results = self.mano_branch(mano_encoding, mano_params=mano_params)
+
+        return preds_joints, pred_mano_results, gt_mano_results, preds_obj
 
 
 class HOModel(nn.Module):
@@ -160,7 +138,7 @@ class HOModel(nn.Module):
         if self.training:
             losses = {}
             total_loss = 0
-            preds_joints2d, pred_mano_results, gt_mano_results, preds_obj, pred_obj_mask = self.honet(imgs, bbox_hand, bbox_obj, mano_params=mano_params)
+            preds_joints2d, pred_mano_results, gt_mano_results, preds_obj = self.honet(imgs, bbox_hand, bbox_obj, mano_params=mano_params)
             if mano_params is not None:
                 mano_total_loss, mano_losses = self.mano_loss.compute_loss(pred_mano_results, gt_mano_results)
                 total_loss += mano_total_loss
@@ -177,18 +155,18 @@ class HOModel(nn.Module):
                     losses[key] = val
                 total_loss += obj_total_loss
 
-                border_loss = self.object_loss.compute_border_loss(preds_obj)
+                '''border_loss = self.object_loss.compute_border_loss(preds_obj)
                 losses["border_loss"] = border_loss.detach().cpu()
-                total_loss += border_loss
-            if pred_obj_mask is not None:
+                total_loss += border_loss'''
+            '''if pred_obj_mask is not None:
                 mask_loss = 100 * F.binary_cross_entropy(pred_obj_mask.squeeze(), obj_mask.squeeze())
                 losses["obj_mask_loss"] = mask_loss.detach().cpu()
-                total_loss += mask_loss
+                total_loss += mask_loss'''
             if total_loss is not None:
                 losses["total_loss"] = total_loss.detach().cpu()
             else:
                 losses["total_loss"] = 0
             return total_loss, losses
         else:
-            preds_joints, pred_mano_results, gt_mano_results, preds_obj, _ = self.honet(imgs, bbox_hand, bbox_obj, mano_params=mano_params, batch_idx=batch_idx)
+            preds_joints, pred_mano_results, gt_mano_results, preds_obj = self.honet(imgs, bbox_hand, bbox_obj, mano_params=mano_params, batch_idx=batch_idx)
             return preds_joints, pred_mano_results, gt_mano_results, preds_obj

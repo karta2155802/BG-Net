@@ -16,7 +16,7 @@ class Transformer(nn.Module):
         output = query
         for i, layer in enumerate(self.layers):
             output, attn_score = layer(query=output, key=key)
-        return output, attn_score
+        return output#, attn_score
 
 
 class Mlp(nn.Module):
@@ -79,16 +79,16 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer)
-        self.q_embedding = nn.Parameter(torch.randn(1, dim, inp_res, inp_res))
-        self.k_embedding = nn.Parameter(torch.randn(1, dim, inp_res, inp_res))
+        #self.q_embedding = nn.Parameter(torch.randn(1, dim, inp_res, inp_res))
+        #self.k_embedding = nn.Parameter(torch.randn(1, dim, inp_res, inp_res))
 
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else tensor + pos
 
     def forward(self, query, key, query_embed=None, key_embed=None):
         b, c, h, w = query.shape
-        query_embed = repeat(self.q_embedding, "() n c d -> b n c d", b = b)
-        key_embed = repeat(self.k_embedding, "() n c d -> b n c d", b = b)
+        #query_embed = repeat(self.q_embedding, "() n c d -> b n c d", b = b)
+        #key_embed = repeat(self.k_embedding, "() n c d -> b n c d", b = b)
 
         q = self.with_pos_embed(query, query_embed)
         k = self.with_pos_embed(key, key_embed)

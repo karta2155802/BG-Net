@@ -2,6 +2,7 @@
 
 ## Requirement
 * Pytorch2.0
+* CUDA 11.8
 * Other packages
 ```
 pip install -r requirements.txt

@@ -1,3 +1,9 @@
-pip install opencv-python
-pip install numpy einops tqdm pillow
-pip install open3d trimesh matplotlib
+opencv-python
+numpy==1.23.5 
+einops
+tqdm
+pillow
+open3d==0.16.0
+trimesh
+matplotlib
+chumpy

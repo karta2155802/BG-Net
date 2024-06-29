@@ -56,7 +56,7 @@ You need to follow directory structure of the `data` as below.
 * For the MANO layer, I used [manopth](https://github.com/hassony2/manopth). 
 
 ### Train  
-#### HO3d
+#### HO3D
 ```
 python traineval.py --use_ho3d
 ```
@@ -65,9 +65,9 @@ python traineval.py --use_ho3d
 python traineval.py
 ```
 ### Test  
-#### HO3d
+#### HO3D
 ```
-python traineval.py --use_ho3d --evaluate
+python traineval.py --use_ho3d --evaluate --resume ${model_path}
 ```
 #### Dex-ycb
 ```

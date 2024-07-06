@@ -10,6 +10,10 @@ from dataset.ho3d_util import filter_test_object_ho3d, get_unseen_test_object, f
 from utils.metric import eval_object_pose, eval_batch_obj, eval_hand, eval_hand_pose_result
 from utils.vis import vis_3d, vis_keypoints, vis_keypoints_with_skeleton, vis_bbox
 
+from thop import profile
+from pthflops import count_ops
+from torchstat import stat
+
 
 def single_epoch(args, loader, model, epoch=None, optimizer=None, indices_order=None):
     save_path = args.host_folder
@@ -59,12 +63,28 @@ def single_epoch(args, loader, model, epoch=None, optimizer=None, indices_order=
             obj_p2d_gt = sample["obj_p2d"].float().cuda()
             obj_mask = sample["obj_mask"].float().cuda()
             #print(sample["mano_param"])
-
+            
             # measure data loading time
             time_meters.add_loss_value("data_time", time.time() - end)
+
+            #cal total params
+            '''total_params = 0
+            for name, parameter in model.named_parameters():
+                if not parameter.requires_grad:
+                    continue
+                params = parameter.numel()
+                total_params += params
+            print(f"Total Trainable Params: {total_params}")'''
+            
+   
             # model forward
             model_loss, model_losses = model(imgs, bbox_hand, bbox_obj, mano_params=mano_params,
                                              joints_uv=joints_uv, obj_p2d_gt=obj_p2d_gt, obj_mask=obj_mask)
+            # cal flops
+            '''flops, params = profile(model.cuda(), inputs=(imgs.cuda(), bbox_hand.cuda(), bbox_obj.cuda()))
+            print('FLOPs = ' + str(flops/1000**3) + 'G')
+            print('Params = ' + str(params/1000**2) + 'M')'''
+
             # compute gradient and do SGD step
             optimizer.zero_grad()
             model_loss.backward()

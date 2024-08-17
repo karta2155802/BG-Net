@@ -71,7 +71,7 @@ python traineval.py --use_ho3d --evaluate --resume ${model_path}
 ```
 #### Dex-ycb
 ```
-python traineval.py --evlaute
+python traineval.py --evaluate
 ```  
 
 ## Acknowledgments
